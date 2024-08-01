@@ -1,0 +1,38 @@
+from airflow.models import DagRun, DagBag
+from airflow.operators.python import PythonOperator
+from airflow.utils.state import State
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+
+def check_dag_b_running(**kwargs):
+    dag_b = DagBag().get_dag('DAG_B')
+    running_dagruns = DagRun.find(dag_id='DAG_B', state=State.RUNNING)
+    
+    if running_dagruns:
+        send_email_notification()
+        raise ValueError("DAG_B is already running")
+    else:
+        # Trigger DAG_B here if not running
+        kwargs['ti'].xcom_push(key='trigger_dag_b', value=True)
+
+def send_email_notification():
+    sender = 'your_email@example.com'
+    receiver = 'receiver_email@example.com'
+    subject = 'DAG_B is already running'
+    body = 'DAG_B is already in running state. Another instance cannot be triggered.'
+    
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = receiver
+    
+    with smtplib.SMTP('smtp.example.com') as server:
+        server.sendmail(sender, receiver, msg.as_string())
+
+check_dag_b_task = PythonOperator(
+    task_id='check_dag_b_running',
+    python_callable=check_dag_b_running,
+    provide_context=True,
+    dag=dag_a,
+)
