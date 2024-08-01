@@ -1,0 +1,70 @@
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.dagrun_operator import TriggerDagRunOperator
+from airflow.models import DagRun, DagBag
+from airflow.utils.state import State
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+
+def check_dag_b_state(**kwargs):
+    dag_b = DagBag().get_dag('DAG_B')
+    recent_dag_run = DagRun.find(dag_id='DAG_B', order_by=-DagRun.execution_date, limit=1)
+    
+    if recent_dag_run:
+        recent_dag_run = recent_dag_run[0]
+        if recent_dag_run.state == State.RUNNING:
+            send_email_notification('DAG_B is already running')
+            raise ValueError("DAG_B is already running")
+        elif recent_dag_run.state == State.FAILED:
+            # If previous run failed, you can decide what to do, for now, we'll just log it
+            kwargs['ti'].xcom_push(key='previous_dag_b_failed', value=True)
+    else:
+        kwargs['ti'].xcom_push(key='trigger_dag_b', value=True)
+
+def send_email_notification(message):
+    sender = 'your_email@example.com'
+    receiver = 'receiver_email@example.com'
+    subject = message
+    body = message
+    
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = receiver
+    
+    with smtplib.SMTP('smtp.example.com') as server:
+        server.sendmail(sender, receiver, msg.as_string())
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2023, 1, 1),
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+dag_a = DAG(
+    'DAG_A',
+    default_args=default_args,
+    description='A DAG_A to check and trigger DAG_B',
+    schedule_interval=timedelta(minutes=10),
+)
+
+check_dag_b_task = PythonOperator(
+    task_id='check_dag_b_state',
+    python_callable=check_dag_b_state,
+    provide_context=True,
+    dag=dag_a,
+)
+
+trigger_dag_b = TriggerDagRunOperator(
+    task_id='trigger_dag_b',
+    trigger_dag_id='DAG_B',
+    dag=dag_a,
+    trigger_rule='all_success',
+    # Only trigger if previous task was successful and DAG_B is not already running
+    condition=lambda context: context['ti'].xcom_pull(task_ids='check_dag_b_state', key='trigger_dag_b')
+)
+
+check_dag_b_task >> trigger_dag_b
